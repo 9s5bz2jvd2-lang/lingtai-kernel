@@ -143,3 +143,5 @@ Apache-2.0 — [Zesen Huang](https://github.com/huangzesen), 2025–2026
 [lingtai.ai](https://lingtai.ai) · [GitHub](https://github.com/Lingtai-AI/lingtai-kernel) · [TUI](https://github.com/Lingtai-AI/lingtai)
 
 </div>
+
+<!-- Maintainer update: Runyuan Wang (9s5bz2jvd2-lang). -->
