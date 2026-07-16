@@ -349,6 +349,28 @@ def _convert_history_to_turns(history: list[dict]) -> list[dict]:
     return turns
 
 
+def _seed_turns_to_interactions_steps(turns: list[dict]) -> list[dict]:
+    """Wrap canonical history turns as Interactions-native input steps.
+
+    ``to_gemini()`` deliberately returns the provider-neutral ``role`` /
+    ``content`` turn shape used by client-side history.  The Interactions SDK,
+    however, treats a bare list of those turns as one new user input.  Wrap
+    each historical turn explicitly so the SDK preserves model/tool-call and
+    user/tool-result boundaries when a fresh session is seeded.
+    """
+    steps: list[dict] = []
+    for turn in turns:
+        if turn.get("type") in {"model_output", "user_input"}:
+            steps.append(turn)
+            continue
+        content = turn.get("content", [])
+        if not content:
+            continue
+        step_type = "model_output" if turn.get("role") == "model" else "user_input"
+        steps.append({"type": step_type, "content": content})
+    return steps
+
+
 class InteractionsChatSession(ChatSession):
     """Chat session backed by the Gemini Interactions API.
 
@@ -410,15 +432,15 @@ class InteractionsChatSession(ChatSession):
         converted_input = self._convert_input(message)
 
         # If we have pending seed turns (session resume with history but no
-        # interaction_id), prepend them to the first call as TurnParam list.
+        # interaction_id), prepend them to the first call as explicit
+        # Interactions steps. Keep the role/content form in client history.
         if self._pending_seed_turns is not None:
-            seed = self._pending_seed_turns
+            seed_turns = self._pending_seed_turns
             self._pending_seed_turns = None
-            # Record seed turns into client history
-            self._client_history.extend(seed)
-            # Merge: seed turns + new user message as a final user turn
-            seed.append({"role": "user", "content": converted_input})
-            converted_input = seed
+            self._client_history.extend(seed_turns)
+            seed_steps = _seed_turns_to_interactions_steps(seed_turns)
+            seed_steps.append({"type": "user_input", "content": converted_input})
+            converted_input = seed_steps
         else:
             # Record user turn
             self._client_history.append({"role": "user", "content": converted_input})
@@ -457,11 +479,12 @@ class InteractionsChatSession(ChatSession):
         converted_input = self._convert_input(message)
 
         if self._pending_seed_turns is not None:
-            seed = self._pending_seed_turns
+            seed_turns = self._pending_seed_turns
             self._pending_seed_turns = None
-            self._client_history.extend(seed)
-            seed.append({"role": "user", "content": converted_input})
-            converted_input = seed
+            self._client_history.extend(seed_turns)
+            seed_steps = _seed_turns_to_interactions_steps(seed_turns)
+            seed_steps.append({"type": "user_input", "content": converted_input})
+            converted_input = seed_steps
         else:
             self._client_history.append({"role": "user", "content": converted_input})
 

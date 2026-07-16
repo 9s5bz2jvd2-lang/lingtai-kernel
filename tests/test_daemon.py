@@ -1290,6 +1290,63 @@ def test_compact_success_prunes_to_system_call_and_result(tmp_path, monkeypatch)
     assert state["state"] == "done"
 
 
+def test_compact_success_uses_response_when_interface_omits_assistant(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    compact_call = ToolCall(name="compact", args={"_reason": "handoff"}, id="compact-1")
+    service = _CanonicalFakeService([
+        [_resp(tool_calls=[compact_call])],
+        [_resp("done after compact")],
+    ])
+    original_create_session = service.create_session
+
+    def create_session_without_first_assistant(**kwargs):
+        session = original_create_session(**kwargs)
+        if len(service.sessions) == 1:
+            original_send = session.send
+
+            def send_without_assistant_history(message):
+                response = original_send(message)
+                history = session.interface.to_dict()
+                if history and history[-1]["role"] == "assistant":
+                    session.interface = ChatInterface.from_dict(history[:-1])
+                return response
+
+            session.send = send_without_assistant_history
+        return session
+
+    service.create_session = create_session_without_first_assistant
+    import lingtai.llm.service as service_mod
+
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-test"
+    run_dir = _make_run_dir(agent, em_id=em_id, task="task")
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id,
+        run_dir,
+        *mgr._build_tool_surface([]),
+        "task",
+        threading.Event(),
+    )
+
+    assert result == "done after compact"
+    assert len(service.sessions) == 2
+    retained_request = service.sessions[1].request_snapshots[0]
+    assert [entry["role"] for entry in retained_request] == [
+        "system",
+        "assistant",
+        "user",
+    ]
+    assert retained_request[1]["content"][0]["id"] == "compact-1"
+    assert retained_request[2]["content"][0]["id"] == "compact-1"
+
+
 def test_compact_is_repeatable_same_run(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
     first = ToolCall(name="compact", args={"_reason": "first handoff"}, id="compact-1")

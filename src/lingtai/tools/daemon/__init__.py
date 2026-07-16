@@ -2694,19 +2694,33 @@ class DaemonManager:
                 if compact_batch_allowed and compact_reset_accepted:
                     if cancel_event.is_set():
                         return _mark_cancelled_or_timeout(run_dir, timeout_event)
-                    from lingtai.kernel.llm.interface import ChatInterface
-                    history = session.interface.to_dict()
-                    compact_assistant = history[-1] if history else None
-                    if not (
-                        isinstance(compact_assistant, dict)
-                        and compact_assistant.get("role") == "assistant"
+                    # The returned provider-neutral response is authoritative:
+                    # Gemini Interactions keeps model turns in _client_history,
+                    # not session.interface.  Validate the sole call/result pair
+                    # before constructing a fresh canonical reset boundary.
+                    compact_call = response.tool_calls[0]
+                    if len(tool_results) != 1:
+                        raise RuntimeError("compact context reset requires exactly one tool result")
+                    compact_result = tool_results[0]
+                    compact_call_id = compact_call.id or ""
+                    if (
+                        compact_result.id != compact_call_id
+                        or compact_result.name != compact_call.name
                     ):
-                        raise RuntimeError("compact context reset requires an intact assistant compact call")
+                        raise RuntimeError("compact context reset requires a matching compact result")
+                    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+                    history = session.interface.to_dict()
                     system_entries = [e for e in history if e.get("role") == "system"]
                     retained = ChatInterface.from_dict(
-                        ([system_entries[-1]] if system_entries else [])
-                        + [compact_assistant]
+                        [system_entries[-1]] if system_entries else []
                     )
+                    retained.add_assistant_message([
+                        ToolCallBlock(
+                            id=compact_call_id,
+                            name=compact_call.name,
+                            args=dict(compact_call.args or {}),
+                        )
+                    ])
                     session = service.create_session(
                         system_prompt=system_prompt,
                         tools=schemas or None,
