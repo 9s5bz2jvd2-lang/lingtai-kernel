@@ -436,6 +436,7 @@ class TaskCardEventProjection:
             return {}
         supported = (
             "input_tokens",
+            "output_tokens",
             "session_cache_rate",
             "cache_miss_tokens",
             "cache_miss_budget",
@@ -926,6 +927,9 @@ class TaskCardEventProjection:
         tokens = cls.format_count(metadata.get("input_tokens"))
         if tokens is not None:
             session_parts.append(f"tokens {tokens}")
+        output = cls.format_count(metadata.get("output_tokens"))
+        if output is not None:
+            session_parts.append(f"out {output}")
         cache_rate = metadata.get("session_cache_rate")
         if (
             type(cache_rate) in {int, float}

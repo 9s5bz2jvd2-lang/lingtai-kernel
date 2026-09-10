@@ -53,9 +53,11 @@ onto its one tracked resident Task Card target per account+chat.
   `agent_record.async_work` snapshot for daemon+Shell presentation. It performs
   no daemon/Shell fallback scan. It also implements compound-ID binding,
   high-water supersession, Telegram API classification, real transport, resident
-  persistence, and programmable file projection callbacks
-  (`src/lingtai/mcp_servers/telegram/manager.py:2716-2726`,
-  `src/lingtai/mcp_servers/telegram/manager.py:2848-2901`).
+  persistence, and programmable file projection callbacks. Representative
+  owning ranges are delivery/deferred coordination
+  (`src/lingtai/mcp_servers/telegram/manager.py:2237-2648`), event and usage
+  projection (`src/lingtai/mcp_servers/telegram/manager.py:2717-3401`), and
+  programmable/resident lifecycle (`src/lingtai/mcp_servers/telegram/manager.py:3403-4250`).
   `_taskcard_display_expression()` reads the durable declarative display
   expression from `TelegramService` at each automatic projection tick
   (`_broadcast_task_card_event_window`, `_ensure_task_card_resident`) and
@@ -84,10 +86,19 @@ onto its one tracked resident Task Card target per account+chat.
   grammar: an ordered, allowlisted selection of the fragments
   (`header`/`rows`/`blank`/`footer`/`divider`/`metadata`/`time`/`ask_agent`)
   `format_rows_task_card_text` already renders, never arbitrary interpolated
-  data. It renders only a pre-projected allowlisted pending-activity label;
+  data. Telegram's adapter converts this shared Markdown frame to supported
+  HTML by escaping the complete frame before substituting only exact static
+  presentation lines; within the shared source budget it shortens only escaped
+  dynamic content for fixed tag overhead, while Feishu consumes the shared frame
+  unchanged. In Telegram HTML, `_telegram_task_card_html`
+  (`src/lingtai/mcp_servers/telegram/manager.py:185-301`) gives Session the
+  cumulative compact `out` value, puts Async Work in a separate icon-free
+  section, and leaves the per-call metrics line as plain text.
+  It renders only a pre-projected allowlisted pending-activity label
+  (`src/lingtai/mcp_servers/task_card/event_projection.py:1281-1289`);
   `TelegramManager` derives that label for canonical `shell.run` from literal
   `input.async`, so no command/path/environment argument enters the row
-  (`src/lingtai/mcp_servers/task_card/event_projection.py:1221-1301`).
+  (`src/lingtai/mcp_servers/telegram/manager.py:2972-2989`).
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
 - Retained legacy files in this package (`controller.py`, `_family.py`,
@@ -109,8 +120,12 @@ onto its one tracked resident Task Card target per account+chat.
   `TaskCardEventProjection` and keeps unrelated private helpers as compatibility
   wrappers.
 - `TelegramManager` constructs `TaskCardResidentTransport` with dynamic provider
-  callbacks. The shared core never imports Telegram, reads its state file, or
-  classifies Bot API errors.
+  callbacks and supplies Telegram's HTML programmable-section header. The shared
+  core only composes that injected provider label; it never imports Telegram,
+  reads its state file, or classifies Bot API errors. Telegram send/edit use
+  `parse_mode=HTML`; the programmable body is authored Telegram HTML or common
+  plain text, while the adapter escapes the complete automatic frame before it
+  adds the exact supported HTML presentation lines.
 - `TelegramManager._broadcast_programmable_task_card_file()` reads
   `taskcard/status` first: exact `active` reads the body and projects it
   (diff-only against the last committed programmable frame); exact `inactive`

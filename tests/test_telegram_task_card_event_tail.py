@@ -262,7 +262,7 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     footer_idx = next(i for i, ln in enumerate(rendered.splitlines()) if "Don't reply to this Task Card." in ln)
     assert len(api_dividers) == 2
     assert footer_idx == 0
-    assert rendered.splitlines()[footer_idx + 1] == TaskCardEventProjection.header("en")
+    assert rendered.splitlines()[footer_idx + 1] == "📋 <b>ACTIVITIES</b>"
     assert all(value in rendered for value in ("text one", "• bash.run:", "text two", "• read.read:"))
     assert len(rendered) <= manager._TASK_CARD_TEXT_LIMIT
     assert all(secret not in rendered for secret in (
@@ -278,7 +278,7 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     latest_footer_idx = next(i for i, ln in enumerate(latest_lines) if "Don't reply to this Task Card." in ln)
     assert len(latest_api_dividers) == 1
     assert latest_footer_idx == 0
-    assert latest_lines[latest_footer_idx + 1] == TaskCardEventProjection.header("en")
+    assert latest_lines[latest_footer_idx + 1] == "📋 <b>ACTIVITIES</b>"
     assert "text two" in latest and "• read.read:" in latest
     assert "text one" not in latest and "• bash.run:" not in latest
 
@@ -1765,7 +1765,7 @@ def test_active_seconds_tick_does_not_edit_after_interval(
     manager._broadcast_task_card_event_window()
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert len(edits) == 2
-    assert "agent · idle" in edits[-1][3]
+    assert "<b>Agent</b> · idle" in edits[-1][3]
 
 
 def test_fingerprint_ignores_only_wall_clock_ticks(tmp_path):

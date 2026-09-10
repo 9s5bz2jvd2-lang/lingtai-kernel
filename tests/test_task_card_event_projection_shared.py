@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from lingtai.mcp_servers.task_card import TaskCardEventProjection
-from lingtai.mcp_servers.telegram.manager import TelegramManager
+from lingtai.mcp_servers.telegram.manager import TelegramManager, _telegram_task_card_html
 
 
 def test_shared_projection_matches_telegram_safe_group_shape() -> None:
@@ -84,7 +84,7 @@ def test_shared_result_projection_updates_only_matching_safe_rows() -> None:
     assert "PRIVATE_RESULT" not in str(groups)
 
 
-def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
+def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> None:
     groups = [
         {
             "api_call_id": "api-1",
@@ -101,7 +101,15 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         }
     ]
     now = datetime(2026, 8, 3, 2, 30, tzinfo=timezone(timedelta(hours=8)))
-    metadata = {"agent_lifecycle": "active", "api_calls": 2}
+    metadata = {
+        "agent_lifecycle": "active",
+        "api_calls": 2,
+        "output_tokens": 12_345,
+        "model": "gpt<5>&",
+        "device_short_name": "dev-1",
+        "working_dir": "/tmp/taskcard",
+        "async_work": {"running": 1},
+    }
 
     shared = TaskCardEventProjection.render_event_groups(
         groups,
@@ -122,7 +130,6 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         now=now,
     )
 
-    assert shared == telegram
     assert shared == (
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
@@ -132,10 +139,64 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "• bash.run: build (0ms, running)\n"
         "\n"
         "────────\n"
-        "Session · active · calls 2\n"
+        "Session · active · gpt<5>& · out 12.3k · calls 2\n"
+        "────────\n"
+        "Identity · device · dev-1 | path · /tmp/taskcard\n"
+        "────────\n"
+        "Async Work · running 1\n"
         "Last Updated: 02:30:00 U+8\n"
         "Ask agent for \"Task Card\""
     )
+    assert _telegram_task_card_html(shared) == telegram
+    assert telegram == (
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10, current: 1).\n"
+        "📋 <b>ACTIVITIES</b>\n"
+        f"{TaskCardEventProjection.API_CALL_DIVIDER}\n"
+        "• public response\n"
+        "• bash.run: build (0ms, running)\n"
+        "\n"
+        "📊 <b>SESSION</b>\n"
+        "<b>Agent</b> · active · gpt&lt;5&gt;&amp;\n"
+        "<b>Context</b> · out 12.3k\n"
+        "<b>Cache</b> · calls 2\n"
+        "\n"
+        "🪪 <b>IDENTITY</b>\n"
+        "<b>Device</b> · dev-1\n"
+        "<b>Path</b> · <code>/tmp/taskcard</code>\n"
+        "\n"
+        "<b>ASYNC WORK</b>\n"
+        "<b>Status</b> · running 1\n"
+        "🕒 Last Updated: 02:30:00 U+8\n"
+        "💬 <i>Ask agent for \"Task Card\"</i>"
+    )
+
+
+def test_telegram_html_converter_keeps_api_metrics_plain() -> None:
+    shared = "↻ 3.4s ↓1.2k (56.8k) ↑512.3k ◌ 259.8k | 55.0%"
+
+    telegram = _telegram_task_card_html(shared)
+
+    assert telegram == shared
+    assert "<code>" not in telegram
+
+
+def test_telegram_html_converter_escapes_dynamic_text_before_static_markup() -> None:
+    shared = TaskCardEventProjection.format_rows_task_card_text([
+        {"kind": "text", "text": "public <reply> & note"},
+        {
+            "tool": "shell",
+            "tool_action": "run",
+            "reasoning": "inspect <node> & preserve > state",
+            "status": "???",
+        },
+    ])
+    telegram = _telegram_task_card_html(shared)
+
+    assert "📋 <b>ACTIVITIES</b>" in telegram
+    assert "public &lt;reply&gt; &amp; note" in telegram
+    assert "inspect &lt;node&gt; &amp; preserve &gt; state" in telegram
+    assert "public <reply>" not in telegram
 
 
 def test_shared_render_rejects_malformed_pending_activity_labels() -> None:

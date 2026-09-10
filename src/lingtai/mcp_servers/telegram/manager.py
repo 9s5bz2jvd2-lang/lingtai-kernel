@@ -21,6 +21,7 @@ import socket
 import tempfile
 import time
 from datetime import datetime, timezone
+from html import escape as html_escape
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -144,6 +145,7 @@ _TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS = frozenset({
     "bad request: message can't be deleted for everyone",
     "bad request: message can not be deleted for everyone",
 })
+_TELEGRAM_TASK_CARD_PARSE_MODE = "HTML"
 
 # Fixed human warning shown on every Task Card render (running and frozen
 # last-behavior). Jason: never reply to the card; point directly to the local
@@ -179,6 +181,125 @@ def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
     """
     return TaskCardEventProjection.footer(normal_rows, locale)
 
+
+def _telegram_task_card_html(text: str) -> str:
+    """Escape one shared frame, then add Telegram's exact static HTML styling."""
+    rendered: list[str] = []
+    headers = {"📋 ACTIVITIES": "ACTIVITIES", "📋 活动": "活动"}
+    asks = {
+        'Ask agent for "Task Card"': 'Ask agent for "Task Card"',
+        '向 agent 询问 "Task Card"': '向 agent 询问 "Task Card"',
+    }
+    metadata_prefixes = (
+        ("Session · ", "📊 <b>SESSION</b>", "session"),
+        ("会话 · ", "📊 <b>SESSION</b>", "session"),
+        ("Identity · ", "🪪 <b>IDENTITY</b>", "identity"),
+        ("身份 · ", "🪪 <b>IDENTITY</b>", "identity"),
+        ("Async Work · ", "<b>ASYNC WORK</b>", "async"),
+        ("异步工作 · ", "<b>异步工作</b>", "async"),
+    )
+    async_row_prefixes = (
+        ("Daemons · ", "Daemons"),
+        ("守护进程 · ", "守护进程"),
+        ("Backends · ", "Backends"),
+        ("后端 · ", "后端"),
+        ("Shell · ", "Shell"),
+        ("Daemon stats · ", "Daemon stats"),
+        ("守护进程统计 · ", "守护进程统计"),
+    )
+    def session_rows(payload: str) -> list[str]:
+        parts = payload.split(" · ")
+        cache_at = next(
+            (i for i, part in enumerate(parts) if part.startswith(("cache ", "miss ", "calls "))),
+            len(parts),
+        )
+        context_at = next(
+            (
+                i
+                for i, part in enumerate(parts[:cache_at])
+                if part.startswith(("ctx ", "tokens ", "out "))
+            ),
+            cache_at,
+        )
+        agent_parts = parts[:context_at]
+        if agent_parts[:1] == ["agent"]:
+            agent_parts = agent_parts[1:]
+        groups = (
+            ("Agent", agent_parts),
+            ("Context", parts[context_at:cache_at]),
+            ("Cache", parts[cache_at:]),
+        )
+        rows = [
+            f"<b>{label}</b> · {html_escape(' · '.join(values), quote=False)}"
+            for label, values in groups
+            if values
+        ]
+        return rows or [html_escape(payload, quote=False)]
+
+    def identity_rows(payload: str) -> list[str]:
+        if payload.startswith("device · "):
+            device, separator, path = payload[len("device · "):].partition(" | path · ")
+            rows = [f"<b>Device</b> · {html_escape(device, quote=False)}"]
+            if separator:
+                rows.append(f"<b>Path</b> · <code>{html_escape(path, quote=False)}</code>")
+            return rows
+        if payload.startswith("path · "):
+            path = payload[len("path · "):]
+            return [f"<b>Path</b> · <code>{html_escape(path, quote=False)}</code>"]
+        return [html_escape(payload, quote=False)]
+
+    metadata_started = False
+    previous_metadata_section: str | None = None
+    for line in text.splitlines():
+        if line == TaskCardEventProjection.METADATA_DIVIDER:
+            metadata_started = True
+            continue
+        if metadata_started:
+            metadata = next(
+                (
+                    (prefix, heading, section)
+                    for prefix, heading, section in metadata_prefixes
+                    if line.startswith(prefix)
+                ),
+                None,
+            )
+            if metadata is not None:
+                prefix, heading, section = metadata
+                if previous_metadata_section not in {None, section}:
+                    rendered.append("")
+                payload = line[len(prefix):]
+                if section == "session":
+                    rows = session_rows(payload)
+                elif section == "identity":
+                    rows = identity_rows(payload)
+                else:
+                    rows = [f"<b>Status</b> · {html_escape(payload, quote=False)}"]
+                rendered.extend((heading, *rows))
+                previous_metadata_section = section
+                continue
+            if previous_metadata_section == "async":
+                async_row = next(
+                    (
+                        (prefix, label)
+                        for prefix, label in async_row_prefixes
+                        if line.startswith(prefix)
+                    ),
+                    None,
+                )
+                if async_row is not None:
+                    prefix, label = async_row
+                    payload = html_escape(line[len(prefix):], quote=False)
+                    rendered.append(f"<b>{label}</b> · {payload}")
+                    continue
+        safe = html_escape(line, quote=False)
+        if line in headers:
+            safe = f"📋 <b>{headers[line]}</b>"
+        elif line in asks:
+            safe = f"💬 <i>{html_escape(asks[line], quote=False)}</i>"
+        elif line.startswith(("Last Updated: ", "最后更新: ")):
+            safe = f"🕒 {safe}"
+        rendered.append(safe)
+    return "\n".join(rendered)
 
 def _format_task_card_current_time(now: datetime) -> str:
     """Render a render-time instant as ``HH:MM:SS UTC±HH`` (hour-only offset).
@@ -715,6 +836,7 @@ class TelegramManager:
         self._task_card_pending_edit_stop = threading.Event()
         self._resident = TaskCardResident(
             enabled=self._raw_taskcard_enabled(),
+            programmable_header="🎯 <b>TASK CARD</b>",
             transport=TaskCardResidentTransport(
                 get_resident=lambda route: self._get_resident_task_card(
                     route.account,
@@ -2139,6 +2261,7 @@ class TelegramManager:
             result = acct.send_message(
                 chat_id, text,
                 reply_to_message_id=reply_to_message_id,
+                parse_mode=_TELEGRAM_TASK_CARD_PARSE_MODE,
             )
         except Exception as e:
             log.debug("Failed to send progress message: %s", e)
@@ -2228,7 +2351,10 @@ class TelegramManager:
                     return _TASK_CARD_EDIT_THROTTLED, None
                 self._task_card_last_edit_at[key] = now
             acct = self._service.get_account(account)
-            acct.edit_message(chat_id, tg_msg_id, text)
+            acct.edit_message(
+                chat_id, tg_msg_id, text,
+                parse_mode=_TELEGRAM_TASK_CARD_PARSE_MODE,
+            )
             return _TASK_CARD_EDIT_OK, None
         except Exception as exc:
             outcome = self._task_card_edit_error_outcome(exc)
@@ -2267,20 +2393,20 @@ class TelegramManager:
     # Overall render ceiling, safely below Telegram's 4096-char message limit.
     _TASK_CARD_TEXT_LIMIT = TaskCardEventProjection.TEXT_LIMIT
     # Header shown at the top of every card.
-    _TASK_CARD_HEADER = TaskCardEventProjection.HEADER
+    _TASK_CARD_HEADER = "📋 <b>ACTIVITIES</b>"
     # The two composed channels of the single resident card (Jason #7258/#7259).
     _TASK_CARD_CHANNELS = ("automatic", "programmable")
     _TASK_CARD_DEFAULT_CHANNEL = "automatic"
     # Header for the appended programmable section; keeps the composed message
     # legible when both channels are present. English-only (Jason #7175/#7205).
-    _TASK_CARD_PROGRAMMABLE_HEADER = "— TASK CARD —"
+    _TASK_CARD_PROGRAMMABLE_HEADER = "🎯 <b>TASK CARD</b>"
     # Terminal presentation delivered when clearing a programmable-ONLY resident
     # would otherwise compose to empty text. Telegram cannot edit a message to
     # empty text, so a stable, nonempty, English-only marker is shown instead,
     # leaving the one resident message reusable by a later automatic or
     # programmable frame. It is presentation-only: the committed programmable slot
     # is still cleared, so it never persists as stored channel state.
-    _TASK_CARD_WATCH_STOPPED = "— TASK CARD STOPPED —"
+    _TASK_CARD_WATCH_STOPPED = "✅ <b>TASK CARD STOPPED</b>"
 
     def _channel_key(self, account: str, chat_id: int) -> str:
         return self._resident.key(account, chat_id)
@@ -2529,7 +2655,7 @@ class TelegramManager:
         """Render retained legacy programmable-card JSON for compatibility tests.
 
         The retired Telegram-owned controller supplied this validated schema
-        object. The current public intrinsic instead emits a full text/Markdown
+        object. The current public intrinsic instead emits a full authored text
         body through the agent-local file artifact, and Telegram's read-only file
         projector does not use this JSON formatter. When retained compatibility
         code invokes it, secret redaction still runs on every free-text field
@@ -2562,7 +2688,7 @@ class TelegramManager:
         text = "\n".join(parts)
         if len(text) > cls._TASK_CARD_TEXT_LIMIT:
             text = text[:cls._TASK_CARD_TEXT_LIMIT]
-        return text
+        return _telegram_task_card_html(text)
 
     # ------------------------------------------------------------------
     # Automatic Task Card event tail (agent-behavior broadcast)
@@ -3420,6 +3546,13 @@ class TelegramManager:
                     line,
                     count=1,
                 )
+            elif line.startswith("<b>Agent</b> · "):
+                line = re.sub(
+                    r"(?<=<b>Agent</b> · )active \(\d+s\)(?= · |$)",
+                    "active",
+                    line,
+                    count=1,
+                )
             stable_lines.append(line)
         stable = "\n".join(stable_lines)
         return hashlib.sha256(stable.encode("utf-8", "replace")).hexdigest()
@@ -3445,13 +3578,13 @@ class TelegramManager:
         if not force:
             self._flush_pending_task_card_edits()
         normal_rows = self._taskcard_normal_rows()
-        automatic = TaskCardEventProjection.render_event_groups(
+        automatic = _telegram_task_card_html(TaskCardEventProjection.render_event_groups(
             self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=normal_rows,
             locale=self._taskcard_locale(),
             display_expression=self._taskcard_display_expression(),
-        )
+        ))
         fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
             key = (account, chat_id)
@@ -3624,13 +3757,13 @@ class TelegramManager:
         the first card a human sees is already complete; the 5s blanket keeps
         it fresh from there.
         """
-        automatic = TaskCardEventProjection.render_event_groups(
+        automatic = _telegram_task_card_html(TaskCardEventProjection.render_event_groups(
             self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=self._taskcard_normal_rows(),
             locale=self._taskcard_locale(),
             display_expression=self._taskcard_display_expression(),
-        )
+        ))
         return self._deliver_channel_frame(
             account,
             chat_id,
@@ -4036,16 +4169,18 @@ class TelegramManager:
         Secret redaction always runs on each row's reasoning *before* any
         excerpt or length trim, so a secret can never survive truncation, and
         every row is always represented even under length pressure — rows are
-        never dropped to fit; only per-row excerpts shrink.  The
-        ``_TASK_CARD_TEXT_LIMIT`` budget governs that reasoning-excerpt
-        shrinkage only; it is not a guarantee that the whole render stays under
-        the limit.  Fixed per-row scaffolding is unbounded in the number of
-        rows, so many selected rows can still produce a render above the budget
-        (and above Telegram's transport limit).  The durable ``/taskcard N``
-        control bounds the latest API-call groups to 1-10; it does not truncate
-        fixed row scaffolding.  See ``_format_rows_task_card_text``.
+        never dropped to fit; only per-row excerpts shrink.
+        The shared ``_TASK_CARD_TEXT_LIMIT`` budget governs the source frame.
+        The Telegram adapter trims only escaped dynamic line content when the
+        source frame is within that budget, accounting for its fixed HTML tags
+        and emojis without dropping rows. Fixed per-row scaffolding is unbounded
+        in the number of rows, so a source frame already above the budget can
+        still exceed the budget (and Telegram's transport limit). The durable
+        ``/taskcard N`` control bounds the latest API-call groups to 1-10; it
+        does not truncate fixed row scaffolding. See
+        ``_format_rows_task_card_text``.
         """
-        return TaskCardEventProjection.format_task_card_text(
+        return _telegram_task_card_html(TaskCardEventProjection.format_task_card_text(
             tool,
             action,
             reasoning,
@@ -4053,12 +4188,12 @@ class TelegramManager:
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
-        )
+        ))
 
     @classmethod
     def _format_scalar_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
-        return TaskCardEventProjection.format_scalar_task_card_text(
-            tool, action, reasoning,
+        return _telegram_task_card_html(
+            TaskCardEventProjection.format_scalar_task_card_text(tool, action, reasoning)
         )
 
     @staticmethod
@@ -4077,13 +4212,13 @@ class TelegramManager:
         now: datetime | None = None,
         locale: str = "en",
     ) -> str:
-        return TaskCardEventProjection.format_rows_task_card_text(
+        return _telegram_task_card_html(TaskCardEventProjection.format_rows_task_card_text(
             rows,
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
             locale=locale,
-        )
+        ))
 
     @staticmethod
     def _task_card_render_time(now: datetime | None) -> str:

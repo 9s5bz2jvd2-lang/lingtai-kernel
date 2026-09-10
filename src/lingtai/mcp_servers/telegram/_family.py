@@ -141,10 +141,11 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
         "file paths in message text as a substitute for attaching the file."
     )
     send["properties"]["rendering_mode"]["description"] = (
-        "Default is Markdown for the agent's messages. Choose plain_text for "
-        "unformatted text/chat actions, HTML/MarkdownV2 for other parse modes, "
-        "entities when supplying MessageEntity data, or rich for a native structured "
-        "message; you may omit it to use Markdown; do not combine modes."
+        "Default is Markdown for the agent's messages; omit rendering_mode for "
+        "ordinary content and write valid Telegram Markdown. Use plain_text only when "
+        "literal, unformatted output is intentional, HTML/MarkdownV2 for other parse "
+        "modes, entities when supplying MessageEntity data, or rich for a native "
+        "structured message; do not combine modes."
     )
     send["properties"]["entities"]["anyOf"][0]["description"] = (
         "Telegram MessageEntity[] for rendering_mode='entities' on message text."
@@ -327,8 +328,9 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             schemas[action]["properties"][field]["description"] = description
 
     rich_mode_description = (
-        "Default is Markdown; use plain_text, HTML, MarkdownV2, or entities for "
-        "text formatting, or rich with structured_message for native Telegram blocks."
+        "Default is Markdown; omit rendering_mode for ordinary content and write valid "
+        "Telegram Markdown. Use plain_text only for intentionally literal, unformatted "
+        "output; use HTML, MarkdownV2, entities, or rich only when needed."
     )
     rich_content_description = (
         "Native rich content: require rendering_mode='rich' and title; optional "
